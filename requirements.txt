@@ -1,0 +1,7 @@
+pymupdf
+pandas
+spacy
+pdfplumber
+openai
+
+#install via: pip install -r requirements.txt
