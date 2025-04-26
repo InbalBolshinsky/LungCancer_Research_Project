@@ -1,60 +1,20 @@
-# =====================================
-# 🔹 Essential Python `.gitignore`
-# =====================================
-
-# Compiled Python files
+# Python
 __pycache__/
-*.py[cod]
-*$py.class
-
-# Virtual environments
-.env
-.venv
+*.pyc
+*.pyo
+*.pyd
 env/
 venv/
-ENV/
-env.bak/
-venv.bak/
 
-# Jupyter Notebook checkpoints
-.ipynb_checkpoints
+# Environment
+.env
 
-# Logs and temporary files
-*.log
-*.tmp
-*.cache
-
-# Unit test / coverage reports
-.tox/
-.nox/
-.coverage
-.pytest_cache/
-
-# IDE / Editor-specific settings
-.vscode/
-.idea/
-*.sublime-workspace
-
-# Type-checking tools
-.mypy_cache/
-.pyre/
-.pytype/
-
-# =====================================
-# 🔹 Project-Specific `.gitignore`
-# =====================================
-
-# Ignore extracted patient data (PDFs, CSVs, JSONs)
-*.pdf
+# Outputs
 *.csv
-*.xlsx
-*.json
-*.xml
-extracted_text/
-structured_data/
 
-# Ignore API keys & sensitive credentials
-config.yaml
-openai_key.txt
-*.secret
-*.pem
+# VSCode settings
+.vscode/
+
+# Misc
+.DS_Store
+Thumbs.db
