@@ -1,10 +1,14 @@
 import pandas as pd
+import os
 
 # === CONFIG ===
-input_file = "patients_summary.csv"
-output_html = "analysis_report.html"
+input_file = os.path.join("../output", "patients_summary.csv")  # Input CSV from output/
+output_folder = "../output"
+output_html = os.path.join(output_folder, "analysis_report.html")
 
-# === Load data ===
+os.makedirs(output_folder, exist_ok=True)
+
+# === Load the data ===
 df = pd.read_csv(input_file, encoding="utf-8-sig")
 
 # === Prepare the pieces ===

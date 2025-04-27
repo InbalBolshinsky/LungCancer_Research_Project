@@ -1,0 +1,10 @@
+File: 1test.pdf
+  - Redacted Phone: 0507156019
+  - Redacted Phone: 0507156018
+  - Redacted Phone: 0507156017
+  - Redacted Last Name
+  - Redacted Address
+
+File: 2test.pdf
+  - Redacted Address
+
