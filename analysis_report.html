@@ -1,0 +1,196 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Patient Data Quality Control Report</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            background-color: #f9f9f9;
+            margin: 0;
+            padding: 0;
+        }
+        .container {
+            max-width: 900px;
+            margin: 40px auto;
+            background: white;
+            padding: 30px 50px;
+            border-radius: 8px;
+            box-shadow: 0 0 15px rgba(0,0,0,0.1);
+        }
+        h1, h2 {
+            text-align: center;
+            color: #333;
+        }
+        p, ul {
+            font-size: 16px;
+            color: #555;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 20px 0;
+        }
+        table, th, td {
+            border: 1px solid #ccc;
+        }
+        th, td {
+            padding: 10px;
+            text-align: center;
+        }
+        th {
+            background-color: #f0f0f0;
+        }
+        .summary {
+            text-align: center;
+            font-size: 18px;
+            margin-top: 20px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🩺 Patient Data Quality Control Report</h1>
+
+        
+<h2>📋 Basic Information</h2>
+<ul>
+    <li><strong>Number of patients:</strong> 2</li>
+    <li><strong>Number of columns:</strong> 16</li>
+    <li><strong>Columns:</strong> ID, Date of Birth, Stage at Diagnosis, Primary tumor location, Grade, Date of Diagnosis, Date of Surgery, surgery type, metastatic 1st line, Drugs, Best response, Date of Death, Canncer Family History First degree relatives, Other Diseases, Date of Metastatic Spread Outcome, Other Malignancies</li>
+</ul>
+
+
+        <h2>🔍 Missing Values</h2>
+        <table border="1" class="dataframe">
+  <thead>
+    <tr style="text-align: right;">
+      <th></th>
+      <th>Missing Values</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <th>ID</th>
+      <td>0</td>
+    </tr>
+    <tr>
+      <th>Date of Birth</th>
+      <td>0</td>
+    </tr>
+    <tr>
+      <th>Stage at Diagnosis</th>
+      <td>0</td>
+    </tr>
+    <tr>
+      <th>Primary tumor location</th>
+      <td>0</td>
+    </tr>
+    <tr>
+      <th>Grade</th>
+      <td>1</td>
+    </tr>
+    <tr>
+      <th>Date of Diagnosis</th>
+      <td>0</td>
+    </tr>
+    <tr>
+      <th>Date of Surgery</th>
+      <td>1</td>
+    </tr>
+    <tr>
+      <th>surgery type</th>
+      <td>1</td>
+    </tr>
+    <tr>
+      <th>metastatic 1st line</th>
+      <td>0</td>
+    </tr>
+    <tr>
+      <th>Drugs</th>
+      <td>0</td>
+    </tr>
+    <tr>
+      <th>Best response</th>
+      <td>1</td>
+    </tr>
+    <tr>
+      <th>Date of Death</th>
+      <td>2</td>
+    </tr>
+    <tr>
+      <th>Canncer Family History First degree relatives</th>
+      <td>1</td>
+    </tr>
+    <tr>
+      <th>Other Diseases</th>
+      <td>0</td>
+    </tr>
+    <tr>
+      <th>Date of Metastatic Spread Outcome</th>
+      <td>1</td>
+    </tr>
+    <tr>
+      <th>Other Malignancies</th>
+      <td>1</td>
+    </tr>
+  </tbody>
+</table>
+
+        <h2>🎯 Stage at Diagnosis Distribution</h2>
+        <table border="1" class="dataframe">
+  <thead>
+    <tr style="text-align: right;">
+      <th></th>
+      <th>Count</th>
+    </tr>
+    <tr>
+      <th>Stage at Diagnosis</th>
+      <th></th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <th>1</th>
+      <td>1</td>
+    </tr>
+    <tr>
+      <th>III</th>
+      <td>1</td>
+    </tr>
+  </tbody>
+</table>
+
+        <h2>🏹 Best Response Distribution</h2>
+        <table border="1" class="dataframe">
+  <thead>
+    <tr style="text-align: right;">
+      <th></th>
+      <th>Count</th>
+    </tr>
+    <tr>
+      <th>Best response</th>
+      <th></th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <th>PR</th>
+      <td>1</td>
+    </tr>
+    <tr>
+      <th>NaN</th>
+      <td>1</td>
+    </tr>
+  </tbody>
+</table>
+
+        <h2>🪦 Death Summary</h2>
+        <p class="summary">Patients recorded as deceased: <strong>0</strong> out of 2</p>
+
+        <h2>👨‍👩‍👧‍👦 Family Cancer History</h2>
+        <p class="summary">Patients with family history: <strong>1</strong> out of 2</p>
+    </div>
+</body>
+</html>
