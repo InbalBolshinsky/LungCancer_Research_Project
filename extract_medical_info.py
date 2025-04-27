@@ -3,22 +3,40 @@ import pandas as pd
 import openai
 import json
 import os
+import re
 from dotenv import load_dotenv
 
 # === CONFIG ===
 load_dotenv()
 openai.api_key = os.getenv("OPENAI_API_KEY")
-client = openai.OpenAI() 
+client = openai.OpenAI()
 
 docs_folder = "docs"
 output_csv = "patients_summary.csv"
 
-# === Define the medical categories (columns) ===
-columns = [
-    "Patient Full Name", "ID Number", "Age", "Gender", "Address", "Contact Numbers",
-    "Oncological Diagnoses", "Chief Complaint", "Medical History", "Family History",
-    "Medications", "Surgeries", "Body Measurements", "Imaging Results", "Blood Test Results",
-    "Current Treatments", "Recommendations"
+# === Define medical categories ===
+# Fields that GPT will be asked to fill
+gpt_columns = [
+    "Date of Birth",
+    "Stage at Diagnosis",
+    "Primary tumor location",
+    "Grade",
+    "Date of Diagnosis",
+    "Date of Surgery",
+    "surgery type",
+    "metastatic 1st line",
+    "Drugs",
+    "Best response",
+    "Date of Death",
+    "Canncer Family History First degree relatives",
+    "Other Diseases",
+    "Date of Metastatic Spread Outcome",
+    "Other Malignancies"
+]
+
+final_columns = [
+    "ID",  # Auto-generated
+    *gpt_columns
 ]
 
 # === Step 1: Extract text from PDFs ===
@@ -33,8 +51,8 @@ def extract_text_from_pdf(pdf_path):
 def extract_fields_from_text(text):
     system_prompt = (
         "אתה עוזר חכם שמוציא מידע מובנה מתוך דוחות רפואיים בעברית.\n"
-        f"השדות הדרושים: {columns}\n"
-        "החזר JSON בלבד, בלי הסברים.\n"
+        f"השדות הדרושים: {gpt_columns}\n"
+        "החזר JSON בלבד, בלי הסברים, ובלי סימוני ```json.\n"
         "אם אין מידע בשדה, שים מחרוזת ריקה.\n"
     )
 
@@ -51,13 +69,21 @@ def extract_fields_from_text(text):
     if not content.strip():
         raise ValueError("⚠️ Empty response from OpenAI! Maybe the PDF text is too long.")
 
+    # Clean markdown ```json wrapping
+    if content.startswith("```json"):
+        content = content[7:-3].strip()
+    elif content.startswith("```"):
+        content = content[3:-3].strip()
+
+    # Clean trailing commas too
+    content = re.sub(r',(\s*[}\]])', r'\1', content)
+
     try:
         return json.loads(content)
     except json.JSONDecodeError as e:
         print("⚠️ JSON decode error! Full content was:")
         print(content)
-    raise e
-
+        raise e
 
 # === Step 3: Translate structured fields ===
 def translate_fields(hebrew_dict):
@@ -80,13 +106,19 @@ def translate_fields(hebrew_dict):
     if not content.strip():
         raise ValueError("⚠️ Empty response from OpenAI! Maybe the PDF text is too long.")
 
+    if content.startswith("```json"):
+        content = content[7:-3].strip()
+    elif content.startswith("```"):
+        content = content[3:-3].strip()
+
+    content = re.sub(r',(\s*[}\]])', r'\1', content)
+
     try:
         return json.loads(content)
     except json.JSONDecodeError as e:
         print("⚠️ JSON decode error! Full content was:")
         print(content)
-    raise e
-
+        raise e
 
 # === Step 4: Process all PDFs ===
 def process_all_pdfs(docs_folder):
@@ -103,9 +135,15 @@ def process_all_pdfs(docs_folder):
 
     return patient_records
 
+# === Step 4.5: Assign anonymized IDs ===
+def assign_patient_ids(patient_records):
+    for idx, record in enumerate(patient_records, start=1):
+        record["ID"] = f"PAT{idx:03d}"  # PAT001, PAT002, etc.
+    return patient_records
+
 # === Step 5: Save to CSV ===
 def save_to_csv(patient_records, output_csv):
-    df = pd.DataFrame(patient_records, columns=columns)
+    df = pd.DataFrame(patient_records, columns=final_columns)
     df.to_csv(output_csv, index=False, encoding='utf-8-sig')
 
 # === Main run ===
@@ -114,5 +152,6 @@ if __name__ == "__main__":
         raise ValueError("⚠️ OPENAI_API_KEY is missing! Please check your .env file.")
     
     patient_data = process_all_pdfs(docs_folder)
+    patient_data = assign_patient_ids(patient_data)
     save_to_csv(patient_data, output_csv)
     print(f"✅ Done! Output saved to {output_csv}")
