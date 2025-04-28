@@ -1,7 +1,11 @@
+python-dotenv
 pymupdf
 pandas
 spacy
 pdfplumber
 openai
+requests
+
 
 #install via: pip install -r requirements.txt
+

@@ -1,18 +1,13 @@
 import os
 import fitz  # PyMuPDF
 import pandas as pd
-import groq
 import json
 import re
+import requests
 from dotenv import load_dotenv
 
 # === CONFIG ===
 load_dotenv()
-groq_api_key = os.getenv("GROQ_API_KEY")
-if not groq_api_key:
-    raise ValueError("⚠️ GROQ_API_KEY is missing! Please check your .env file.")
-
-client = groq.Groq(api_key=groq_api_key)
 
 docs_folder = "../docs"            # PDFs input folder
 output_folder = "../output"         # Results output folder
@@ -30,6 +25,23 @@ gpt_columns = [
 ]
 
 final_columns = ["ID", *gpt_columns]
+
+# === Connect to local Ollama server ===
+def send_to_llama_local(system_prompt, user_content, model_name="llama3"):
+    response = requests.post(
+        "http://localhost:11434/api/chat",
+        json={
+            "model": model_name,
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_content}
+            ],
+            "stream": False
+        }
+    )
+    response.raise_for_status()
+    content = response.json()["message"]["content"]
+    return content
 
 # === Text anonymization ===
 def anonymize_text(text):
@@ -67,72 +79,8 @@ def extract_text_from_pdf(pdf_path):
         text += page.get_text()
     return text
 
-# === Split text into chunks ===
-def split_text_into_chunks(text, max_chars=2000):
-    """Split text into small chunks (~2000 chars) to avoid exceeding token limits."""
-    paragraphs = text.split("\n\n")
-    chunks = []
-    current_chunk = ""
-
-    for paragraph in paragraphs:
-        if len(current_chunk) + len(paragraph) + 2 <= max_chars:
-            current_chunk += paragraph + "\n\n"
-        else:
-            if current_chunk:
-                chunks.append(current_chunk.strip())
-            current_chunk = paragraph + "\n\n"
-
-    if current_chunk.strip():
-        chunks.append(current_chunk.strip())
-
-    return chunks
-
-# === Summarize text safely ===
-def summarize_text(text):
-    if len(text) > 12000:
-        print("⚡ Text too large. Splitting into smaller chunks for summarization...")
-        chunks = split_text_into_chunks(text, max_chars=2000)
-
-        summaries = []
-        for idx, chunk in enumerate(chunks):
-            print(f"🧩 Summarizing chunk {idx + 1}/{len(chunks)}...")
-            summary = _summarize_single_chunk(chunk)
-            summaries.append(summary)
-
-        combined_summary = "\n\n".join(summaries)
-        return combined_summary
-    else:
-        return _summarize_single_chunk(text)
-
-def _summarize_single_chunk(chunk):
-    system_prompt = (
-        "You are a medical summarization assistant.\n"
-        "Summarize the following medical report into a concise version that preserves all medically important facts.\n"
-        "Keep diagnoses, dates, treatments, family history, surgeries, and important events.\n"
-        "Do not invent or add information. Return the summary as plain text.\n"
-    )
-
-    response = client.chat.completions.create(
-        model="llama3-70b-8192",
-        messages=[
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": chunk}
-        ],
-        temperature=0
-    )
-
-    summary = response.choices[0].message.content.strip()
-    if not summary:
-        raise ValueError("⚠️ Summarization failed, empty response!")
-
-    return summary
-
 # === Extract structured fields from text ===
 def extract_fields_from_text(text):
-    if len(text) > 12000:  # Rough threshold
-        print("⚡ Summarizing text because it's too long...")
-        text = summarize_text(text)
-
     system_prompt = (
         "אתה עוזר חכם שמוציא מידע מובנה מתוך דוחות רפואיים בעברית.\n"
         f"השדות הדרושים: {gpt_columns}\n"
@@ -140,19 +88,8 @@ def extract_fields_from_text(text):
         "אם אין מידע בשדה, שים מחרוזת ריקה.\n"
     )
 
-    response = client.chat.completions.create(
-        model="llama3-70b-8192",
-        messages=[
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": text}
-        ],
-        temperature=0
-    )
-
-    content = response.choices[0].message.content.strip()
-    if not content:
-        raise ValueError("⚠️ Empty response from Groq during extraction!")
-
+    content = send_to_llama_local(system_prompt, text)
+    
     content = re.sub(r'^```json|```$', '', content, flags=re.MULTILINE).strip()
     content = re.sub(r',([\s\n]*[}\]])', r'\1', content)
 
@@ -171,19 +108,8 @@ def translate_fields(hebrew_dict):
         "Return only the translated JSON.\n"
     )
 
-    response = client.chat.completions.create(
-        model="llama3-70b-8192",
-        messages=[
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": json.dumps(hebrew_dict, ensure_ascii=False)}
-        ],
-        temperature=0
-    )
-
-    content = response.choices[0].message.content.strip()
-    if not content:
-        raise ValueError("⚠️ Empty response from Groq during translation!")
-
+    content = send_to_llama_local(system_prompt, json.dumps(hebrew_dict, ensure_ascii=False))
+    
     content = re.sub(r'^```json|```$', '', content, flags=re.MULTILINE).strip()
     content = re.sub(r',([\s\n]*[}\]])', r'\1', content)
 
