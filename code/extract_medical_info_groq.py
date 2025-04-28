@@ -1,16 +1,18 @@
 import os
 import fitz  # PyMuPDF
 import pandas as pd
-import openai
+import groq
 import json
 import re
 from dotenv import load_dotenv
 
 # === CONFIG ===
 load_dotenv()
-openai.api_key = os.getenv("OPENAI_API_KEY")
-client = openai.OpenAI()
+groq_api_key = os.getenv("GROQ_API_KEY")
+if not groq_api_key:
+    raise ValueError("⚠️ GROQ_API_KEY is missing! Please check your .env file.")
 
+client = groq.Groq(api_key=groq_api_key)
 
 docs_folder = "../docs"            # PDFs input folder
 output_folder = "../output"         # Results output folder
@@ -21,42 +23,28 @@ redaction_log_file = os.path.join(output_folder, "redaction_report.txt")
 
 # === Define fields ===
 gpt_columns = [
-    "Date of Birth",
-    "Stage at Diagnosis",
-    "Primary tumor location",
-    "Grade",
-    "Date of Diagnosis",
-    "Date of Surgery",
-    "surgery type",
-    "metastatic 1st line",
-    "Drugs",
-    "Best response",
-    "Date of Death",
-    "Canncer Family History First degree relatives",
-    "Other Diseases",
-    "Date of Metastatic Spread Outcome",
-    "Other Malignancies"
+    "Date of Birth", "Stage at Diagnosis", "Primary tumor location", "Grade",
+    "Date of Diagnosis", "Date of Surgery", "surgery type", "metastatic 1st line",
+    "Drugs", "Best response", "Date of Death", "Canncer Family History First degree relatives",
+    "Other Diseases", "Date of Metastatic Spread Outcome", "Other Malignancies"
 ]
 
-final_columns = ["ID", *gpt_columns]  # Add ID manually
+final_columns = ["ID", *gpt_columns]
 
 # === Text anonymization ===
 def anonymize_text(text):
     redaction_log = []
 
-    # Remove Israeli ID numbers (9 digits)
     ids_found = re.findall(r'\b\d{9}\b', text)
     for id_number in ids_found:
         redaction_log.append(f"Redacted ID: {id_number}")
     text = re.sub(r'\b\d{9}\b', '[REDACTED_ID]', text)
 
-    # Remove phone numbers (050-xxxxxxx or 050xxxxxxx)
     phones_found = re.findall(r'\b05\d[-\s]?\d{7}\b', text)
     for phone_number in phones_found:
         redaction_log.append(f"Redacted Phone: {phone_number}")
     text = re.sub(r'\b05\d[-\s]?\d{7}\b', '[REDACTED_PHONE]', text)
 
-    # Remove first name (שם פרטי) and last name (שם משפחה)
     if re.search(r'שם\s+פרטי', text):
         redaction_log.append("Redacted First Name")
     text = re.sub(r'(שם\s+פרטי\s*:?\s*)(\S+)', r'\1[REDACTED_FIRST_NAME]', text)
@@ -65,7 +53,6 @@ def anonymize_text(text):
         redaction_log.append("Redacted Last Name")
     text = re.sub(r'(שם\s+משפחה\s*:?\s*)(\S+)', r'\1[REDACTED_LAST_NAME]', text)
 
-    # Remove address (כתובת)
     if re.search(r'כתובת', text):
         redaction_log.append("Redacted Address")
     text = re.sub(r'(כתובת\s*:?\s*)([^\n]+)', r'\1[REDACTED_ADDRESS]', text)
@@ -80,8 +67,72 @@ def extract_text_from_pdf(pdf_path):
         text += page.get_text()
     return text
 
-# === Extract structured fields from text (in Hebrew) ===
+# === Split text into chunks ===
+def split_text_into_chunks(text, max_chars=2000):
+    """Split text into small chunks (~2000 chars) to avoid exceeding token limits."""
+    paragraphs = text.split("\n\n")
+    chunks = []
+    current_chunk = ""
+
+    for paragraph in paragraphs:
+        if len(current_chunk) + len(paragraph) + 2 <= max_chars:
+            current_chunk += paragraph + "\n\n"
+        else:
+            if current_chunk:
+                chunks.append(current_chunk.strip())
+            current_chunk = paragraph + "\n\n"
+
+    if current_chunk.strip():
+        chunks.append(current_chunk.strip())
+
+    return chunks
+
+# === Summarize text safely ===
+def summarize_text(text):
+    if len(text) > 12000:
+        print("⚡ Text too large. Splitting into smaller chunks for summarization...")
+        chunks = split_text_into_chunks(text, max_chars=2000)
+
+        summaries = []
+        for idx, chunk in enumerate(chunks):
+            print(f"🧩 Summarizing chunk {idx + 1}/{len(chunks)}...")
+            summary = _summarize_single_chunk(chunk)
+            summaries.append(summary)
+
+        combined_summary = "\n\n".join(summaries)
+        return combined_summary
+    else:
+        return _summarize_single_chunk(text)
+
+def _summarize_single_chunk(chunk):
+    system_prompt = (
+        "You are a medical summarization assistant.\n"
+        "Summarize the following medical report into a concise version that preserves all medically important facts.\n"
+        "Keep diagnoses, dates, treatments, family history, surgeries, and important events.\n"
+        "Do not invent or add information. Return the summary as plain text.\n"
+    )
+
+    response = client.chat.completions.create(
+        model="llama3-70b-8192",
+        messages=[
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": chunk}
+        ],
+        temperature=0
+    )
+
+    summary = response.choices[0].message.content.strip()
+    if not summary:
+        raise ValueError("⚠️ Summarization failed, empty response!")
+
+    return summary
+
+# === Extract structured fields from text ===
 def extract_fields_from_text(text):
+    if len(text) > 12000:  # Rough threshold
+        print("⚡ Summarizing text because it's too long...")
+        text = summarize_text(text)
+
     system_prompt = (
         "אתה עוזר חכם שמוציא מידע מובנה מתוך דוחות רפואיים בעברית.\n"
         f"השדות הדרושים: {gpt_columns}\n"
@@ -89,8 +140,8 @@ def extract_fields_from_text(text):
         "אם אין מידע בשדה, שים מחרוזת ריקה.\n"
     )
 
-    response = client.chat.completions.create( 
-        model="gpt-4o",
+    response = client.chat.completions.create(
+        model="llama3-70b-8192",
         messages=[
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": text}
@@ -98,16 +149,12 @@ def extract_fields_from_text(text):
         temperature=0
     )
 
-    content = response.choices[0].message.content  
-    if not content.strip():
-        raise ValueError("⚠️ Empty response from OpenAI! Maybe the PDF text is too long.")
+    content = response.choices[0].message.content.strip()
+    if not content:
+        raise ValueError("⚠️ Empty response from Groq during extraction!")
 
-    if content.startswith("```json"):
-        content = content[7:-3].strip()
-    elif content.startswith("```"):
-        content = content[3:-3].strip()
-
-    content = re.sub(r',(\s*[}\]])', r'\1', content)  
+    content = re.sub(r'^```json|```$', '', content, flags=re.MULTILINE).strip()
+    content = re.sub(r',([\s\n]*[}\]])', r'\1', content)
 
     try:
         return json.loads(content)
@@ -115,7 +162,6 @@ def extract_fields_from_text(text):
         print("⚠️ JSON decode error! Full content was:")
         print(content)
         raise e
-
 
 # === Translate structured fields to English ===
 def translate_fields(hebrew_dict):
@@ -126,29 +172,25 @@ def translate_fields(hebrew_dict):
     )
 
     response = client.chat.completions.create(
-        model="gpt-4o",
+        model="llama3-70b-8192",
         messages=[
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": json.dumps(hebrew_dict, ensure_ascii=False)}
         ],
         temperature=0
     )
-    content = response.choices[0].message.content
 
-    if not content.strip():
-        raise ValueError("⚠️ Empty response from OpenAI! Maybe the PDF text is too long.")
+    content = response.choices[0].message.content.strip()
+    if not content:
+        raise ValueError("⚠️ Empty response from Groq during translation!")
 
-    if content.startswith("```json"):
-        content = content[7:-3].strip()
-    elif content.startswith("```"):
-        content = content[3:-3].strip()
-
-    content = re.sub(r',(\s*[}\]])', r'\1', content)
+    content = re.sub(r'^```json|```$', '', content, flags=re.MULTILINE).strip()
+    content = re.sub(r',([\s\n]*[}\]])', r'\1', content)
 
     try:
         return json.loads(content)
     except json.JSONDecodeError as e:
-        print("⚠️ JSON decode error! Full content was:")
+        print("⚠️ JSON decode error during translation! Full content was:")
         print(content)
         raise e
 
@@ -164,7 +206,7 @@ def process_all_pdfs(docs_folder):
         pdf_path = os.path.join(docs_folder, pdf_file)
 
         hebrew_text = extract_text_from_pdf(pdf_path)
-        hebrew_text, redactions = anonymize_text(hebrew_text)  
+        hebrew_text, redactions = anonymize_text(hebrew_text)
 
         fields_hebrew = extract_fields_from_text(hebrew_text)
         fields_english = translate_fields(fields_hebrew)
@@ -177,7 +219,7 @@ def process_all_pdfs(docs_folder):
 # === Assign anonymized IDs ===
 def assign_patient_ids(patient_records):
     for idx, record in enumerate(patient_records, start=1):
-        record["ID"] = f"PAT{idx:03d}"  #PAT001, PAT002, etc.
+        record["ID"] = f"PAT{idx:03d}"
     return patient_records
 
 # === Save results to CSV ===
@@ -196,9 +238,6 @@ def save_redaction_report(redaction_reports, redaction_log_file):
 
 # === Main run ===
 if __name__ == "__main__":
-    if not openai.api_key:
-        raise ValueError("⚠️ OPENAI_API_KEY is missing! Please check your .env file.")
-
     patient_data, redaction_reports = process_all_pdfs(docs_folder)
     patient_data = assign_patient_ids(patient_data)
     save_to_csv(patient_data, output_csv)
