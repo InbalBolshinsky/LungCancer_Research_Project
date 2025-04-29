@@ -7,7 +7,6 @@ import re
 from dotenv import load_dotenv
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
-from peft import PeftModel
 
 # === CONFIG ===
 load_dotenv()
@@ -27,43 +26,34 @@ gpt_columns = [
 ]
 final_columns = ["ID", *gpt_columns]
 
-# === Load Quantized or 8-bit Models ===
-def load_model(model_path, load_in_4bit=True):
-    try:
-        model = AutoModelForCausalLM.from_pretrained(
-            model_path,
-            device_map="auto",
-            torch_dtype=torch.float16,
-            load_in_4bit=load_in_4bit,
-            trust_remote_code=True
-        )
-    except Exception as e:
-        print(f"⚠️ Failed to load {model_path} in 4-bit. Falling back to 8-bit.")
-        model = AutoModelForCausalLM.from_pretrained(
-            model_path,
-            device_map="auto",
-            torch_dtype=torch.float16,
-            load_in_8bit=True,
-            trust_remote_code=True
-        )
-    tokenizer = AutoTokenizer.from_pretrained(model_path, use_fast=True)
+# === Set device (MPS if available)
+device = torch.device("mps" if torch.backends.mps.is_available() else "cpu")
+print(f"✅ Using device: {device}")
+
+# === Load Models ===
+def load_model(model_name):
+    model = AutoModelForCausalLM.from_pretrained(
+        model_name,
+        torch_dtype=torch.float16 if device.type == "mps" else torch.float32,
+    ).to(device)
+    tokenizer = AutoTokenizer.from_pretrained(model_name)
     return model, tokenizer
 
 # === Inference ===
-def infer_quantized(model, tokenizer, system_prompt, user_content, max_new_tokens=1024):
+def infer(model, tokenizer, system_prompt, user_content, max_new_tokens=1024):
     full_prompt = f"<|system|>\n{system_prompt}\n<|user|>\n{user_content}\n<|assistant|>\n"
-    inputs = tokenizer(full_prompt, return_tensors="pt").to(model.device)
+    inputs = tokenizer(full_prompt, return_tensors="pt").to(device)
     outputs = model.generate(**inputs, max_new_tokens=max_new_tokens)
     decoded = tokenizer.decode(outputs[0], skip_special_tokens=True)
     assistant_reply = decoded.split("<|assistant|>")[-1].strip()
     return assistant_reply
 
-# === Load Models ===
-print("🔵 Loading Zephyr 7B GPTQ for translation...")
-model_translator, tokenizer_translator = load_model("TheBloke/zephyr-7b-beta-GPTQ", load_in_4bit=True)
+# === Load Specific Models for Tasks ===
+print("🔵 Loading Mistral 7B for translation...")
+model_translator, tokenizer_translator = load_model("mistralai/Mistral-7B-Instruct-v0.2")  # Best general model
 
-print("🔵 Loading BioMedLM for field extraction...")
-model_extractor, tokenizer_extractor = load_model("path_to_biomedlm_model", load_in_4bit=True)  # Replace with your path
+print("🔵 Loading GanjinZero/biogpt-7b-medical-chat for extraction...")
+model_extractor, tokenizer_extractor = load_model("GanjinZero/biogpt-7b-medical-chat")  # Medical specialist
 
 # === Text Anonymization ===
 def anonymize_text(text):
@@ -107,7 +97,7 @@ def translate_text(hebrew_text):
         "Translate the following medical report text from Hebrew to English, preserving medical terminology and structure.\n"
         "Return only the translated text, no explanations.\n"
     )
-    return infer_quantized(model_translator, tokenizer_translator, system_prompt, hebrew_text)
+    return infer(model_translator, tokenizer_translator, system_prompt, hebrew_text)
 
 # === Extract structured fields from English text ===
 def extract_fields(english_text):
@@ -118,11 +108,9 @@ def extract_fields(english_text):
         "Return only a valid JSON object, no extra text.\n"
         "If a field is missing, use an empty string.\n"
     )
-    content = infer_quantized(model_extractor, tokenizer_extractor, system_prompt, english_text)
-
+    content = infer(model_extractor, tokenizer_extractor, system_prompt, english_text)
     content = re.sub(r'^```json|```$', '', content, flags=re.MULTILINE).strip()
     content = re.sub(r',([\s\n]*[}\]])', r'\1', content)
-
     try:
         return json.loads(content)
     except json.JSONDecodeError as e:
@@ -145,7 +133,11 @@ def process_all_pdfs(docs_folder):
         hebrew_text, redactions = anonymize_text(hebrew_text)
 
         english_text = translate_text(hebrew_text)
-        fields = extract_fields(english_text)
+        try:
+            fields = extract_fields(english_text)
+        except json.JSONDecodeError:
+            print(f"❌ Skipping {pdf_file} due to extraction error.")
+            continue
 
         patient_records.append(fields)
         redaction_reports.append((pdf_file, redactions))
