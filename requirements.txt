@@ -5,6 +5,11 @@ spacy
 pdfplumber
 openai
 requests
+torch
+transformers
+peft
+bitsandbytes
+accelerate
 
 
 #install via: pip install -r requirements.txt

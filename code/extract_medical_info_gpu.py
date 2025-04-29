@@ -1,52 +1,73 @@
+# 🛠 Imports
 import os
 import fitz  # PyMuPDF
 import pandas as pd
 import json
 import re
-import requests
 from dotenv import load_dotenv
+import torch
+from transformers import AutoModelForCausalLM, AutoTokenizer
+from peft import PeftModel
 
 # === CONFIG ===
 load_dotenv()
 
-docs_folder = "../docs"            # PDFs input folder
-output_folder = "../output"         # Results output folder
+docs_folder = "../docs"
+output_folder = "../output"
 os.makedirs(output_folder, exist_ok=True)
 
 output_csv = os.path.join(output_folder, "patients_summary.csv")
 redaction_log_file = os.path.join(output_folder, "redaction_report.txt")
 
-# === Define fields ===
 gpt_columns = [
     "Date of Birth", "Stage at Diagnosis", "Primary tumor location", "Grade",
     "Date of Diagnosis", "Date of Surgery", "surgery type", "metastatic 1st line",
     "Drugs", "Best response", "Date of Death", "Canncer Family History First degree relatives",
     "Other Diseases", "Date of Metastatic Spread Outcome", "Other Malignancies"
 ]
-
 final_columns = ["ID", *gpt_columns]
 
-# === Connect to local Ollama server ===
-def send_to_llama_local(system_prompt, user_content, model_name="llama3"):
-    response = requests.post(
-        "http://localhost:11434/api/chat",
-        json={
-            "model": model_name,
-            "messages": [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_content}
-            ],
-            "stream": False
-        }
-    )
-    response.raise_for_status()
-    content = response.json()["message"]["content"]
-    return content
+# === Load Quantized or 8-bit Models ===
+def load_model(model_path, load_in_4bit=True):
+    try:
+        model = AutoModelForCausalLM.from_pretrained(
+            model_path,
+            device_map="auto",
+            torch_dtype=torch.float16,
+            load_in_4bit=load_in_4bit,
+            trust_remote_code=True
+        )
+    except Exception as e:
+        print(f"⚠️ Failed to load {model_path} in 4-bit. Falling back to 8-bit.")
+        model = AutoModelForCausalLM.from_pretrained(
+            model_path,
+            device_map="auto",
+            torch_dtype=torch.float16,
+            load_in_8bit=True,
+            trust_remote_code=True
+        )
+    tokenizer = AutoTokenizer.from_pretrained(model_path, use_fast=True)
+    return model, tokenizer
 
-# === Text anonymization ===
+# === Inference ===
+def infer_quantized(model, tokenizer, system_prompt, user_content, max_new_tokens=1024):
+    full_prompt = f"<|system|>\n{system_prompt}\n<|user|>\n{user_content}\n<|assistant|>\n"
+    inputs = tokenizer(full_prompt, return_tensors="pt").to(model.device)
+    outputs = model.generate(**inputs, max_new_tokens=max_new_tokens)
+    decoded = tokenizer.decode(outputs[0], skip_special_tokens=True)
+    assistant_reply = decoded.split("<|assistant|>")[-1].strip()
+    return assistant_reply
+
+# === Load Models ===
+print("🔵 Loading Zephyr 7B GPTQ for translation...")
+model_translator, tokenizer_translator = load_model("TheBloke/zephyr-7b-beta-GPTQ", load_in_4bit=True)
+
+print("🔵 Loading BioMedLM for field extraction...")
+model_extractor, tokenizer_extractor = load_model("path_to_biomedlm_model", load_in_4bit=True)  # Replace with your path
+
+# === Text Anonymization ===
 def anonymize_text(text):
     redaction_log = []
-
     ids_found = re.findall(r'\b\d{9}\b', text)
     for id_number in ids_found:
         redaction_log.append(f"Redacted ID: {id_number}")
@@ -79,17 +100,26 @@ def extract_text_from_pdf(pdf_path):
         text += page.get_text()
     return text
 
-# === Extract structured fields from text ===
-def extract_fields_from_text(text):
+# === Translate Hebrew to English ===
+def translate_text(hebrew_text):
     system_prompt = (
-        "אתה עוזר חכם שמוציא מידע מובנה מתוך דוחות רפואיים בעברית.\n"
-        f"השדות הדרושים: {gpt_columns}\n"
-        "החזר JSON בלבד, בלי הסברים, ובלי סימוני ```json.\n"
-        "אם אין מידע בשדה, שים מחרוזת ריקה.\n"
+        "You are a professional medical translator.\n"
+        "Translate the following medical report text from Hebrew to English, preserving medical terminology and structure.\n"
+        "Return only the translated text, no explanations.\n"
     )
+    return infer_quantized(model_translator, tokenizer_translator, system_prompt, hebrew_text)
 
-    content = send_to_llama_local(system_prompt, text)
-    
+# === Extract structured fields from English text ===
+def extract_fields(english_text):
+    system_prompt = (
+        "You are an expert medical assistant.\n"
+        "Extract the following fields as a JSON object from the given English medical report text:\n"
+        f"{gpt_columns}\n"
+        "Return only a valid JSON object, no extra text.\n"
+        "If a field is missing, use an empty string.\n"
+    )
+    content = infer_quantized(model_extractor, tokenizer_extractor, system_prompt, english_text)
+
     content = re.sub(r'^```json|```$', '', content, flags=re.MULTILINE).strip()
     content = re.sub(r',([\s\n]*[}\]])', r'\1', content)
 
@@ -97,26 +127,6 @@ def extract_fields_from_text(text):
         return json.loads(content)
     except json.JSONDecodeError as e:
         print("⚠️ JSON decode error! Full content was:")
-        print(content)
-        raise e
-
-# === Translate structured fields to English ===
-def translate_fields(hebrew_dict):
-    system_prompt = (
-        "You are a professional medical translator.\n"
-        "Translate the field values in the following JSON from Hebrew to English without changing the JSON structure.\n"
-        "Return only the translated JSON.\n"
-    )
-
-    content = send_to_llama_local(system_prompt, json.dumps(hebrew_dict, ensure_ascii=False))
-    
-    content = re.sub(r'^```json|```$', '', content, flags=re.MULTILINE).strip()
-    content = re.sub(r',([\s\n]*[}\]])', r'\1', content)
-
-    try:
-        return json.loads(content)
-    except json.JSONDecodeError as e:
-        print("⚠️ JSON decode error during translation! Full content was:")
         print(content)
         raise e
 
@@ -128,16 +138,16 @@ def process_all_pdfs(docs_folder):
     pdf_files = [f for f in os.listdir(docs_folder) if f.endswith(".pdf")]
 
     for pdf_file in pdf_files:
-        print(f"Processing {pdf_file}...")
+        print(f"📄 Processing {pdf_file}...")
         pdf_path = os.path.join(docs_folder, pdf_file)
 
         hebrew_text = extract_text_from_pdf(pdf_path)
         hebrew_text, redactions = anonymize_text(hebrew_text)
 
-        fields_hebrew = extract_fields_from_text(hebrew_text)
-        fields_english = translate_fields(fields_hebrew)
-        patient_records.append(fields_english)
+        english_text = translate_text(hebrew_text)
+        fields = extract_fields(english_text)
 
+        patient_records.append(fields)
         redaction_reports.append((pdf_file, redactions))
 
     return patient_records, redaction_reports
@@ -148,12 +158,11 @@ def assign_patient_ids(patient_records):
         record["ID"] = f"PAT{idx:03d}"
     return patient_records
 
-# === Save results to CSV ===
+# === Save results ===
 def save_to_csv(patient_records, output_csv):
     df = pd.DataFrame(patient_records, columns=final_columns)
     df.to_csv(output_csv, index=False, encoding='utf-8-sig')
 
-# === Save redaction report ===
 def save_redaction_report(redaction_reports, redaction_log_file):
     with open(redaction_log_file, "w", encoding="utf-8") as f:
         for filename, redactions in redaction_reports:
